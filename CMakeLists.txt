@@ -8,6 +8,8 @@
 cmake_minimum_required(VERSION 2.6 FATAL_ERROR)
 project(cs344)
 
+set(OpenCV_DIR "/home/roman/opencv_v344/installation/OpenCV-/share/OpenCV/")
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/cmake-modules)
 find_package(OpenCV REQUIRED)
 find_package(CUDA REQUIRED)
 
@@ -21,30 +23,27 @@ if(CUDA_FOUND)
   # to make sure more people can easily run class code without knowing 
   # about this compiler argument
   set(CUDA_NVCC_FLAGS "
-  -ccbin /usr/bin/clang; 
+  -ccbin /usr/bin/g++; 
+  -gencode;arch=compute_61,code=sm_61;  
   -gencode;arch=compute_30,code=sm_30;  
   -gencode;arch=compute_35,code=sm_35;
-  -gencode;arch=compute_35,code=compute_35;
-  -gencode;arch=compute_20,code=sm_20; 
-  -gencode;arch=compute_11,code=sm_11; 
-  -gencode;arch=compute_12,code=sm_12;
-  -gencode;arch=compute_13,code=sm_13;")
+  -gencode;arch=compute_35,code=compute_35;")
 
   # add -Wextra compiler flag for gcc compilations
   if (UNIX)
     set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} "-Xcompiler -Wextra")
-    set(CMAKE_CXX_FLAGS "-stdlib=libstdc++")
+    #    set(CMAKE_CXX_FLAGS "-stdlib=libstdc++")
   endif (UNIX)
 
   # add debugging to CUDA NVCC flags.  For NVidia's NSight tools.
   set(CUDA_NVCC_FLAGS_DEBUG ${CUDA_NVCC_FLAGS_DEBUG} "-G")
 
   add_subdirectory (HW1)
-  add_subdirectory (HW2)
-  add_subdirectory (HW3)
-  add_subdirectory (HW4)
-  add_subdirectory (HW5)
-  add_subdirectory (HW6)
+  # add_subdirectory (HW2)
+  # add_subdirectory (HW3)
+  # add_subdirectory (HW4)
+  # add_subdirectory (HW5)
+  # add_subdirectory (HW6)
 else(CUDA_FOUND)
   message("CUDA is not installed on this system.")
 endif()
