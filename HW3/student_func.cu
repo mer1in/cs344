@@ -81,6 +81,50 @@
 
 #include "utils.h"
 
+// for 1024 threads per block
+#define BLOCK_WIDTH 32   
+
+__global__ void find_max_min_grid(const float* const d_logLuminance,
+                                  float *d_min,
+                                  float *d_max,
+                                  const size_t numRows,
+                                  const size_t numCols)
+{
+    const int2 thread_2D_pos = make_int2(blockIdx.x * blockDim.x + threadIdx.x,
+                                         blockIdx.y * blockDim.y + threadIdx.y);
+    const int thread_1D_pos = thread_2D_pos.y * numCols + thread_2D_pos.x;
+    if (thread_2D_pos.x >= numCols || thread_2D_pos.y >= numRows)
+        return;
+
+    extern __shared__ float sdata[];
+    const unsigned int tid = threadIdx.y * blockDim.x + threadIdx.x;
+    const unsigned int _gridIdx = blockIdx.y * gridDim.x + blockIdx.x;
+    
+    // load into shared mem
+    sdata[tid] = d_logLuminance[thread_1D_pos];
+    __syncthreads();
+
+    // loop over the data
+    for (unsigned int s = blockDim.x * blockDim.y / 2; s; s >>= 1)
+    {
+        if (tid<s)
+        {
+            float left = sdata[tid];
+            float right = sdata[tid+s];
+            sdata[tid] = min(left, right);
+            sdata[blockDim.x * blockDim.y - 1 - tid] = max(left, right);
+        }
+        __syncthreads();
+    }
+
+    // write the results into corresponding grid cell
+    if (tid==0)
+    {
+        d_min[_gridIdx] = sdata[0];
+        d_max[_gridIdx] = sdata[blockDim.x * blockDim.y - 1];
+    }
+}
+
 void your_histogram_and_prefixsum(const float* const d_logLuminance,
                                   unsigned int* const d_cdf,
                                   float &min_logLum,
@@ -100,5 +144,19 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
        the cumulative distribution of luminance values (this should go in the
        incoming d_cdf pointer which already has been allocated for you)       */
 
+    // 0) init variables
+    const dim3 blockSize = dim3(BLOCK_WIDTH, BLOCK_WIDTH);
+    const dim3 gridSize = dim3(1+numCols/BLOCK_WIDTH, 1+numRows/BLOCK_WIDTH);
 
+    float *d_min;
+    float *d_max;
+    checkCudaErrors(cudaMalloc(&d_min, sizeof(float) * gridSize.x * gridSize.y));
+    checkCudaErrors(cudaMalloc(&d_max, sizeof(float) * gridSize.x * gridSize.y));
+
+    // 1) find the minimum and maximum value in the input logLuminance channel
+    //    scan with grid of 32x32 blocks
+    find_max_min_grid<<<gridSize, blockSize, sizeof(float) * BLOCK_WIDTH * BLOCK_WIDTH>>>
+        (d_logLuminance, d_min, d_max, numRows, numCols);
+    //    reduce the grid
+    
 }
