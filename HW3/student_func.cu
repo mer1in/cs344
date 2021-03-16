@@ -124,7 +124,35 @@ __global__ void find_max_min_grid(const float* const d_logLuminance,
         d_max[_gridIdx] = sdata[blockDim.x * blockDim.y - 1];
     }
 }
+__global__ void find_max_min(float *d_min, float *d_max)
+{
+    extern __shared__ float s_min[];
+    const unsigned int tid = threadIdx.x;
 
+    // load into shared mem
+    float *s_max = s_min + blockDim.x;
+    s_min[tid] = d_min[threadIdx.x];
+    s_max[tid] = d_max[threadIdx.x];
+    __syncthreads();
+  
+    // loop over the data
+    for (unsigned int s = blockDim.x / 2; s; s >>= 1)
+    {
+        if (tid<s)
+        {
+            s_min[tid] = min(s_min[tid], s_min[tid+s]);
+            s_max[tid] = max(s_max[tid], s_max[tid+s]);
+        }
+        __syncthreads();
+    }
+  
+    // write the results into corresponding grid cell
+    if (tid==0)
+    {
+        d_min[0] = s_min[0];
+        d_max[0] = s_max[0];
+    }
+}
 void your_histogram_and_prefixsum(const float* const d_logLuminance,
                                   unsigned int* const d_cdf,
                                   float &min_logLum,
@@ -157,6 +185,8 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
     //    scan with grid of 32x32 blocks
     find_max_min_grid<<<gridSize, blockSize, sizeof(float) * BLOCK_WIDTH * BLOCK_WIDTH>>>
         (d_logLuminance, d_min, d_max, numRows, numCols);
-    //    reduce the grid
-    
+
+    //    reduce the grid, return result in the input array at first position
+    //    assume input picture is less than 1000px on its longest side
+    find_max_min<<<1, gridSize.x*gridSize.y, sizeof(float) * 2 * gridSize.x * gridSize.y>>>(d_min, d_max);
 }
