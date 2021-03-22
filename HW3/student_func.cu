@@ -109,11 +109,16 @@ __global__ void find_max_min_grid(const float* const d_logLuminance,
     {
         if (tid<s)
         {
-            float left = sdata[tid];
-            float right = sdata[tid+s];
-            sdata[tid] = min(left, right);
-            sdata[blockDim.x * blockDim.y - 1 - tid] = max(left, right);
+            float _max = max(
+                sdata[blockDim.x * blockDim.y - 1 - tid],
+                sdata[blockDim.x * blockDim.y - 1 - tid - s]
+            );
+            sdata[tid] = min(sdata[tid], sdata[tid+s]);
+            sdata[blockDim.x * blockDim.y - 1 - tid] = _max;
         }
+        // take uneven case into account
+        if (s&1 && s!=1)
+            s++;
         __syncthreads();
     }
 
@@ -124,6 +129,19 @@ __global__ void find_max_min_grid(const float* const d_logLuminance,
         d_max[_gridIdx] = sdata[blockDim.x * blockDim.y - 1];
     }
 }
+
+// debug func
+__global__ void chck_grid(float *min_grid, float *max_grid, unsigned int size)
+{
+    auto _min = min_grid[0];
+    auto _max = max_grid[0];
+    for (int i=0; i<size; i++)
+        _max = max(_max, max_grid[i]);
+    for (int i=0; i<size; i++)
+        _min = min(_min, min_grid[i]);
+    printf("chck_grid: size = %d; min = %f; max = %f\n", size, _min, _max);
+}
+
 __global__ void find_max_min(float *d_min, float *d_max)
 {
     extern __shared__ float s_min[];
@@ -143,14 +161,18 @@ __global__ void find_max_min(float *d_min, float *d_max)
             s_min[tid] = min(s_min[tid], s_min[tid+s]);
             s_max[tid] = max(s_max[tid], s_max[tid+s]);
         }
+        // take uneven case into account
+        if (s&1 && s!=1)
+            s++;
         __syncthreads();
     }
-  
+
     // write the results into corresponding grid cell
     if (tid==0)
     {
         d_min[0] = s_min[0];
         d_max[0] = s_max[0];
+//        printf("max = %f\n", d_max[0]);
     }
 }
 void your_histogram_and_prefixsum(const float* const d_logLuminance,
@@ -185,6 +207,8 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
     //    scan with grid of 32x32 blocks
     find_max_min_grid<<<gridSize, blockSize, sizeof(float) * BLOCK_WIDTH * BLOCK_WIDTH>>>
         (d_logLuminance, d_min, d_max, numRows, numCols);
+
+    //    chck_grid<<<1,1>>>(d_min, d_max, gridSize.x*gridSize.y);
 
     //    reduce the grid, return result in the input array at first position
     //    assume input picture is less than 1000px on its longest side
