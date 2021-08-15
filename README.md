@@ -3,6 +3,12 @@ cs344
 
 Introduction to Parallel Programming class code
 
+* Video Lectures
+https://www.youtube.com/watch?v=F620ommtjqk&list=PLGvfHSgImk4aweyWlhBXNF6XISY3um82_&index=1
+
+* Repo
+https://github.com/udacity/cs344
+
 # Building on OS X
 
 These instructions are for OS X 10.9 "Mavericks".
