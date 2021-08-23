@@ -50,7 +50,7 @@ void rgba_to_greyscale(const uchar4* const rgbaImage,
   //First create a mapping from the 2D block and grid locations
   //to an absolute 2D location in the image, then use that to
   //calculate a 1D offset
-  int idx = threadIdx.x + blockIdx.x * numCols;
+  int idx = threadIdx.x * numCols + blockIdx.x;
   char v = rgbaImage[idx].x*.299f + rgbaImage[idx].y*.587f + rgbaImage[idx].z*.114f;
   greyImage[idx] = v;
 }
@@ -60,7 +60,7 @@ void your_rgba_to_greyscale(const uchar4 * const h_rgbaImage, uchar4 * const d_r
 {
   //You must fill in the correct sizes for the blockSize and gridSize
   //currently only one block with one thread is being launched
-  const dim3 blockSize(numCols, 1, 1);
+  const dim3 blockSize(numRows, 1, 1);
   const dim3 gridSize(numCols, 1, 1);
   rgba_to_greyscale<<<gridSize, blockSize>>>(d_rgbaImage, d_greyImage, numRows, numCols);
   
