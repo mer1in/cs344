@@ -83,98 +83,69 @@
 
 // for 1024 threads per block
 #define BLOCK_WIDTH 32   
+#define BLOCK_HEIGHT 32   
 
-__global__ void find_max_min_grid(const float* const d_logLuminance,
-                                  float *d_min,
-                                  float *d_max,
-                                  const size_t numRows,
-                                  const size_t numCols)
+__global__ void find_min_max(
+        const float* const d_logLuminance,
+        float* d_limits,
+        const unsigned int count)
 {
-    const int2 thread_2D_pos = make_int2(blockIdx.x * blockDim.x + threadIdx.x,
-                                         blockIdx.y * blockDim.y + threadIdx.y);
-    const int thread_1D_pos = thread_2D_pos.y * numCols + thread_2D_pos.x;
-    if (thread_2D_pos.x >= numCols || thread_2D_pos.y >= numRows)
-        return;
-
-    extern __shared__ float sdata[];
-    const unsigned int tid = threadIdx.y * blockDim.x + threadIdx.x;
-    const unsigned int _gridIdx = blockIdx.y * gridDim.x + blockIdx.x;
-    
-    // load into shared mem
-    sdata[tid] = d_logLuminance[thread_1D_pos];
-    __syncthreads();
-
-    // loop over the data
-    for (unsigned int s = blockDim.x * blockDim.y / 2; s; s >>= 1)
-    {
-        if (tid<s)
-        {
-            float _max = max(
-                sdata[blockDim.x * blockDim.y - 1 - tid],
-                sdata[blockDim.x * blockDim.y - 1 - tid - s]
-            );
-            sdata[tid] = min(sdata[tid], sdata[tid+s]);
-            sdata[blockDim.x * blockDim.y - 1 - tid] = _max;
-        }
-        // take uneven case into account
-        if (s&1 && s!=1)
-            s++;
-        __syncthreads();
-    }
-
-    // write the results into corresponding grid cell
-    if (tid==0)
-    {
-        d_min[_gridIdx] = sdata[0];
-        d_max[_gridIdx] = sdata[blockDim.x * blockDim.y - 1];
-    }
-}
-
-// debug func
-__global__ void chck_grid(float *min_grid, float *max_grid, unsigned int size)
-{
-    auto _min = min_grid[0];
-    auto _max = max_grid[0];
-    for (int i=0; i<size; i++)
-        _max = max(_max, max_grid[i]);
-    for (int i=0; i<size; i++)
-        _min = min(_min, min_grid[i]);
-    printf("chck_grid: size = %d; min = %f; max = %f\n", size, _min, _max);
-}
-
-__global__ void find_max_min(float *d_min, float *d_max)
-{
-    extern __shared__ float s_min[];
+    float __min = d_logLuminance[count-1];
+    float __max = __min;
     const unsigned int tid = threadIdx.x;
+    extern __shared__ float sdata[];
 
-    // load into shared mem
-    float *s_max = s_min + blockDim.x;
-    s_min[tid] = d_min[threadIdx.x];
-    s_max[tid] = d_max[threadIdx.x];
-    __syncthreads();
-  
-    // loop over the data
-    for (unsigned int s = blockDim.x / 2; s; s >>= 1)
+    for (unsigned int base = 0; base < count; base += blockDim.x)
     {
-        if (tid<s)
-        {
-            s_min[tid] = min(s_min[tid], s_min[tid+s]);
-            s_max[tid] = max(s_max[tid], s_max[tid+s]);
-        }
-        // take uneven case into account
-        if (s&1 && s!=1)
-            s++;
+        if (tid+base >= count)
+            return;
+        sdata[tid] = d_logLuminance[base + tid];
         __syncthreads();
+        for (unsigned int s = blockDim.x / 2; s; s /= 2)
+        {
+            if (tid<s)
+            {
+                float _max = max(
+                    sdata[blockDim.x - 1 - tid],
+                    sdata[blockDim.x - 1 - tid - s]
+                );
+                sdata[tid] = min(sdata[tid], sdata[tid+s]);
+                sdata[blockDim.x - 1 - tid] = _max;
+            }
+            // take uneven case into account
+            if (s&1 && s!=1)
+                s++;
+            __syncthreads();
+        }
+        __syncthreads();
+        if (tid==0)
+        {
+            if (__min > sdata[0])
+                __min = sdata[0];
+            if (__max < sdata[blockDim.x - 1])
+                __max = sdata[blockDim.x - 1];
+        }
     }
-
-    // write the results into corresponding grid cell
     if (tid==0)
     {
-        d_min[0] = s_min[0];
-        d_max[0] = s_max[0];
-//        printf("max = %f\n", d_max[0]);
+        d_limits[0] = __min;
+        d_limits[1] = __max;
     }
 }
+
+__global__ void calc_hist_grid(const float* const d_logLuminance, 
+                               const float* d_min,
+                               const float* d_max,
+                               unsigned int *histogram,
+                               const size_t numRows,
+                               const size_t numCols,
+                               const size_t numBins)
+{
+    extern __shared__ float s_histogram[];
+    float lumRange = d_max[0]-d_min[0];
+    
+}
+
 void your_histogram_and_prefixsum(const float* const d_logLuminance,
                                   unsigned int* const d_cdf,
                                   float &min_logLum,
@@ -195,22 +166,27 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
        incoming d_cdf pointer which already has been allocated for you)       */
 
     // 0) init variables
-    const dim3 blockSize = dim3(BLOCK_WIDTH, BLOCK_WIDTH);
-    const dim3 gridSize = dim3(1+numCols/BLOCK_WIDTH, 1+numRows/BLOCK_WIDTH);
+    const dim3 blockSize = dim3(BLOCK_WIDTH, BLOCK_HEIGHT);
+    const dim3 gridSize = dim3(1+numCols/BLOCK_WIDTH, 1+numRows/BLOCK_HEIGHT);
 
-    float *d_min;
-    float *d_max;
-    checkCudaErrors(cudaMalloc(&d_min, sizeof(float) * gridSize.x * gridSize.y));
-    checkCudaErrors(cudaMalloc(&d_max, sizeof(float) * gridSize.x * gridSize.y));
+    float *d_limits;
+    unsigned int *histogram;
+    checkCudaErrors(cudaMalloc(&d_limits, sizeof(float) * 2));
+    checkCudaErrors(cudaMalloc(&histogram, sizeof(unsigned int) * numBins));
+    float* h_limits = (float*)malloc(sizeof(float) * 2);
 
     // 1) find the minimum and maximum value in the input logLuminance channel
-    //    scan with grid of 32x32 blocks
-    find_max_min_grid<<<gridSize, blockSize, sizeof(float) * BLOCK_WIDTH * BLOCK_WIDTH>>>
-        (d_logLuminance, d_min, d_max, numRows, numCols);
+    find_min_max<<<1, BLOCK_WIDTH * BLOCK_HEIGHT, sizeof(float) * BLOCK_WIDTH * BLOCK_HEIGHT>>>
+        (d_logLuminance, d_limits, numRows * numCols);
 
-    //    chck_grid<<<1,1>>>(d_min, d_max, gridSize.x*gridSize.y);
+    checkCudaErrors(cudaMemcpy(h_limits, d_limits, sizeof(float) * 2, cudaMemcpyDeviceToHost));
 
-    //    reduce the grid, return result in the input array at first position
-    //    assume input picture is less than 1000px on its longest side
-    find_max_min<<<1, gridSize.x*gridSize.y, sizeof(float) * 2 * gridSize.x * gridSize.y>>>(d_min, d_max);
+    printf("_min = %f, _max = %f\n", h_limits[0], h_limits[1]);
+
+    // 2) in-place
+    // 3) Calc histogram with per thread atomic (1st step)
+//    calc_hist_grid<<<gridSize, blockSize, sizeof(unsigned int) * gridSize.x * gridSize.y>>>
+//        (d_logLuminance, d_min, d_max, histogram, numRows, numCols, numBins);
+    //    reduce grid of histograms into single one
+
 }

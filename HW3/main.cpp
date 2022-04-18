@@ -44,6 +44,9 @@ int main(int argc, char **argv) {
   double globalError   = 0.0;
   bool useEpsCheck = false;
 
+  printf("Starting\n");
+  std::cerr << "Starting (stderr)" << std::endl;
+
   switch (argc)
   {
 	case 2:
@@ -83,6 +86,8 @@ int main(int argc, char **argv) {
   max_logLum = 1.f;
   timer.Start();
   //call the students' code
+  printf("Starting my code.\n");
+  std::cerr << "Starting my code (stderr)" << std::endl;
   your_histogram_and_prefixsum(d_luminance, d_cdf, min_logLum, max_logLum,
                                numRows, numCols, numBins);
   timer.Stop();
@@ -107,6 +112,8 @@ int main(int argc, char **argv) {
 	min_logLum = std::min(h_luminance[i], min_logLum);
     max_logLum = std::max(h_luminance[i], max_logLum);
   }
+  printf("min_logLum = %f,  max_logLum = %f\n", min_logLum, max_logLum);
+
 
   referenceCalculation(h_luminance, h_cdf, numRows, numCols, numBins, min_logLum, max_logLum);
 
