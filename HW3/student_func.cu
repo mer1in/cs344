@@ -133,17 +133,37 @@ __global__ void find_min_max(
     }
 }
 
-__global__ void calc_hist_grid(const float* const d_logLuminance, 
-                               const float* d_min,
-                               const float* d_max,
-                               unsigned int *histogram,
-                               const size_t numRows,
-                               const size_t numCols,
+// Naive imlementation with atomicAdd.
+// TODO: compare to per-thread histogram calculation and reduce
+__global__ void calc_hist(const float* const d_logLuminance, 
+                               const float* d_limits,
+                               unsigned int *d_histogram,
+                               const size_t count,
                                const size_t numBins)
 {
-    extern __shared__ float s_histogram[];
-    float lumRange = d_max[0]-d_min[0];
-    
+    extern __shared__ unsigned int s_histogram[];
+    float lumRange = d_limits[1]-d_limits[0];
+    float lumMin = d_limits[0];
+    unsigned int tid = threadIdx.x;
+
+    // it works because numBins == blockDim.x
+    s_histogram[tid] = 0;
+    __syncthreads();
+
+    for (unsigned int base = 0; base < count; base += blockDim.x)
+    {
+        unsigned int bin = (d_logLuminance[base + tid] - lumMin) / lumRange * (numBins-1);
+        if (bin == 1024)
+        {
+//            printf("bin = %d\n", bin);
+            printf("d_logLuminance[%d] = %f, base = %d, lumMin = %f, lumRange = %f, numBins = %d\n", 
+                base+tid, d_logLuminance[base+tid], base, lumMin, lumRange, numBins);
+        }
+        atomicAdd(&(s_histogram[bin]), 1);
+        //s_histogram[bin] += 1;
+    }
+    __syncthreads();
+    d_histogram[tid] = s_histogram[tid];
 }
 
 void your_histogram_and_prefixsum(const float* const d_logLuminance,
@@ -159,9 +179,9 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
     1) find the minimum and maximum value in the input logLuminance channel
        store in min_logLum and max_logLum
     2) subtract them to find the range
-    3) generate a histogram of all the values in the logLuminance channel using
+    3) generate a d_histogram of all the values in the logLuminance channel using
        the formula: bin = (lum[i] - lumMin) / lumRange * numBins
-    4) Perform an exclusive scan (prefix sum) on the histogram to get
+    4) Perform an exclusive scan (prefix sum) on the d_histogram to get
        the cumulative distribution of luminance values (this should go in the
        incoming d_cdf pointer which already has been allocated for you)       */
 
@@ -170,9 +190,12 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
     const dim3 gridSize = dim3(1+numCols/BLOCK_WIDTH, 1+numRows/BLOCK_HEIGHT);
 
     float *d_limits;
-    unsigned int *histogram;
+    unsigned int *d_histogram;
+//    unsigned int *d_histogram_per_thread;
+//    unsigned int numThreads = numBins;
     checkCudaErrors(cudaMalloc(&d_limits, sizeof(float) * 2));
-    checkCudaErrors(cudaMalloc(&histogram, sizeof(unsigned int) * numBins));
+    checkCudaErrors(cudaMalloc(&d_histogram, sizeof(unsigned int) * numBins));
+//    checkCudaErrors(cudaMalloc(&d_histogram_per_thread, sizeof(unsigned int) * numBins * numThreads));
     float* h_limits = (float*)malloc(sizeof(float) * 2);
 
     // 1) find the minimum and maximum value in the input logLuminance channel
@@ -183,10 +206,7 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 
     printf("_min = %f, _max = %f\n", h_limits[0], h_limits[1]);
 
-    // 2) in-place
-    // 3) Calc histogram with per thread atomic (1st step)
-//    calc_hist_grid<<<gridSize, blockSize, sizeof(unsigned int) * gridSize.x * gridSize.y>>>
-//        (d_logLuminance, d_min, d_max, histogram, numRows, numCols, numBins);
-    //    reduce grid of histograms into single one
+    calc_hist<<<1, numBins, sizeof(unsigned int) * numBins>>>
+        (d_logLuminance, d_limits, d_histogram, numRows*numCols, numBins);
 
 }
