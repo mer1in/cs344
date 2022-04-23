@@ -133,8 +133,46 @@ __global__ void find_min_max(
     }
 }
 
-// Naive imlementation with atomicAdd.
-// TODO: compare to per-thread histogram calculation and reduce
+__global__ void calc_hist_per_thread(const float* const d_logLuminance,
+                          const float* d_limits,
+                          unsigned int *d_histogram,
+                          const size_t count,
+                          const size_t numBins)
+{
+    /*
+    calc in non-blocking way:
+        - advantage = no block
+        - disadvantage = use slow mem + extra time to reduce
+    
+    Result: this func extends overall time to 50%
+    */
+
+    float lumRange = d_limits[1]-d_limits[0];
+    float lumMin = d_limits[0];
+    unsigned int tid = threadIdx.x;
+    unsigned int slot = tid * blockDim.x;
+
+    for (unsigned int base = 0; base < count; base += blockDim.x)
+    {
+        if (base+tid >= count)
+            break;
+        unsigned int bin = (d_logLuminance[base + tid] - lumMin) / lumRange * numBins;
+        if (bin == numBins)
+            bin--;
+        d_histogram[slot + bin]++;
+    }
+    __syncthreads();
+    for (int s = blockDim.x>>1; s; s >>= 1)
+    {
+        for (unsigned int i = 0; i<numBins; i++)
+        {
+            if (tid<s)
+                d_histogram[slot+i] += d_histogram[slot+i+s];
+        }
+        __syncthreads();
+    }
+}
+
 __global__ void calc_hist(const float* const d_logLuminance,
                           const float* d_limits,
                           unsigned int *d_histogram,
@@ -196,11 +234,17 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 
     float *d_limits;
     unsigned int *d_histogram;
+//    unsigned int *d_histogram_per_thread;
     checkCudaErrors(cudaMalloc(&d_limits, sizeof(float) * 2));
     checkCudaErrors(cudaMalloc(&d_histogram, sizeof(unsigned int) * numBins));
+//    checkCudaErrors(cudaMalloc(&d_histogram_per_thread, sizeof(unsigned int) * numBins * numBins));
+//    checkCudaErrors(cudaMemset(d_histogram_per_thread, 0, sizeof(unsigned int) * numBins * numBins));
 
     find_min_max<<<1, BLOCK_WIDTH * BLOCK_HEIGHT, sizeof(float) * BLOCK_WIDTH * BLOCK_HEIGHT>>>
         (d_logLuminance, d_limits, numRows * numCols);
+
+//    calc_hist_per_thread<<<1, numBins>>>
+//        (d_logLuminance, d_limits, d_histogram_per_thread, numRows*numCols, numBins);
 
     calc_hist<<<1, numBins, sizeof(unsigned int) * numBins>>>
         (d_logLuminance, d_limits, d_histogram, numRows*numCols, numBins);
@@ -210,4 +254,5 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 
     checkCudaErrors(cudaFree(d_limits));
     checkCudaErrors(cudaFree(d_histogram));
+//    checkCudaErrors(cudaFree(d_histogram_per_thread));
 }
