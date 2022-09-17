@@ -42,6 +42,11 @@
 
  */
 
+#define BITS 4
+#define BINS_COUNT (1<<BITS)
+#define MASK (BINS_COUNT-1)
+#define test(val,bin,shift) ((val>>shift) & (~bin))
+
 __global__ void r_sort(unsigned int* const d_inputVals,
                        unsigned int* const d_inputPos,
                        unsigned int* const d_outputVals,
@@ -49,7 +54,32 @@ __global__ void r_sort(unsigned int* const d_inputVals,
                        const size_t numElems)
 {
     const unsigned int tid = threadIdx.x;
-    
+    const unsigned int threadsCount = blockDim.x;
+    extern __shared__ float s_hist[];
+
+    unsigned int* const sourceVals = d_inputVals;
+    unsigned int* const sourcePos = d_inputPos;
+    unsigned int* const destVals = d_outputVals;
+    unsigned int* const destPos = d_outputPos;
+
+    int prev = 0; // scan results on previous iteration
+    for (int block = 0; block < numElems; block += threadsCount)
+    {
+        if (!tid)
+            sourceVals[block] += prev;
+        for (int neighborDelta = 1; neighborDelta < threadsCount; neighborDelta = neighborDelta<<1)
+        {
+            int neighborIdx = tid - neighborDelta;
+            if (neighborIdx >= 0)
+                result[tid+block] += source[neighborIdx+block];
+            else
+                result[tid+block] = source[tid+block];
+            __syncronize();
+        }
+        if (!tid)
+            prev = dest[last];
+        __syncronize();
+    }
 }
 
 void your_sort(unsigned int* const d_inputVals,
@@ -58,5 +88,10 @@ void your_sort(unsigned int* const d_inputVals,
                unsigned int* const d_outputPos,
                const size_t numElems)
 { 
-    r_sort<<<1, numElems>>>(d_inputVals, d_inputPos, d_outputVals, d_outputPos, numElems);
+    cudaDeviceProp prop;
+    cudaGetDeviceProperties(&prop, 0);
+
+    // Get device info, use max avail threads
+    r_sort<<<1, prop.maxThreadsPerBlocki, sizeof(unsigned int) * 16>>>
+        (d_inputVals, d_inputPos, d_outputVals, d_outputPos, numElems);
 }
